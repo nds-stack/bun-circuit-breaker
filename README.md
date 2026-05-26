@@ -44,7 +44,8 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 | `failureRateThreshold` | `number` | `0` (disabled) | Failure rate (0–1) within rolling window to open circuit. Set to a value between 0 and 1 to enable time-based failure counting alongside the existing consecutive threshold. |
 | `rollingWindow` | `number` | `10000` | Time window in milliseconds for failure rate calculation. Only used when `failureRateThreshold` is set. |
 | `minimumCalls` | `number` | `10` | Minimum calls required within the rolling window before rate-based circuit opening activates. Only used when `failureRateThreshold` is set. |
-| `maxPending` | `number` | `1000` | Maximum pending calls in the promise-chain mutex queue. Exceeding this immediately throws `CircuitBreakerOpenError` to prevent unbounded memory growth. |
+| `maxPending` | `number` | `1000` | Maximum pending calls in the mutex queue. Exceeding this immediately throws `CircuitBreakerQueueFullError` to prevent unbounded memory growth. |
+| `maxListeners` | `number` | `100` | Maximum event listeners per event type. Additional registrations are silently dropped with a warning. |
 | `onOpen` | `() => void` | — | Callback when circuit opens |
 | `onHalfOpen` | `() => void` | — | Callback when circuit becomes half-open |
 | `onClose` | `() => void` | — | Callback when circuit closes |
@@ -53,7 +54,7 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `call(fn)` | `Promise<T>` | Execute a function through the circuit breaker |
+| `call(fn, signal?)` | `Promise<T>` | Execute a function through the circuit breaker. Optionally accepts an `AbortSignal` to cancel queued calls |
 | `forceOpen()` | `void` | Manually force the circuit to open state |
 | `forceClose()` | `void` | Manually force the circuit to closed state |
 | `reset()` | `void` | Reset all stats and return to closed state |
@@ -61,6 +62,8 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 | `on(event, handler)` | `void` | Subscribe to state transition events |
 | `off(event, handler)` | `void` | Unsubscribe from state transition events |
 | `removeAllListeners(event?)` | `void` | Remove all listeners for an event, or all events if no event specified |
+| `toJSON()` | `object` | Serialize circuit state (state, counters, options) for persistence or serverless recovery |
+| `fromJSON(data)` (static) | `CircuitBreaker` | Deserialize saved state into a new `CircuitBreaker` instance |
 
 ### Properties
 
@@ -146,6 +149,7 @@ Constructor throws `RangeError` for invalid option values:
 - `rollingWindow` must be >= 100ms
 - `minimumCalls` must be >= 1
 - `maxPending` must be >= 1
+- `maxListeners` must be >= 1
 
 ### CircuitBreakerQueueFullError
 Thrown when `call()` is invoked while the circuit breaker's pending queue has reached `maxPending`. This indicates backpressure — the system is overloaded. The `code` property is `CIRCUIT_BREAKER_QUEUE_FULL`, distinct from `CircuitBreakerOpenError` so you can handle queue-full and circuit-open differently.
@@ -153,6 +157,53 @@ Thrown when `call()` is invoked while the circuit breaker's pending queue has re
 ### Silent Handling
 - Event handler errors are silently caught to prevent handler exceptions from breaking state transitions
 - Callback options (`onOpen`, `onHalfOpen`, `onClose`) that throw are caught and ignored
+
+### Cancellation via AbortSignal
+
+Pass an `AbortSignal` to `call()` to cancel a queued call before it executes:
+
+```typescript
+import { CircuitBreaker } from "@nds-stack/bun-circuit-breaker";
+import { CircuitBreakerOpenError } from "@nds-stack/bun-circuit-breaker";
+
+const controller = new AbortController();
+const cb = new CircuitBreaker({ resetTimeout: 10000 });
+
+// Schedule a slow call
+setTimeout(() => controller.abort(), 100);
+
+try {
+  await cb.call(async () => {
+    await Bun.sleep(1000);
+    return "done";
+  }, controller.signal);
+} catch (err) {
+  if ((err as Error).name === "AbortError") {
+    console.log("Call was cancelled");
+  }
+}
+```
+
+If the signal is already aborted before entering the mutex queue, `call()` rejects immediately without queueing.
+
+### State Serialization
+
+Save and restore circuit breaker state for serverless cold starts:
+
+```typescript
+import { CircuitBreaker } from "@nds-stack/bun-circuit-breaker";
+
+const cb = new CircuitBreaker({ threshold: 3 });
+
+// Serialize to JSON (e.g., store in Redis)
+const state = cb.toJSON();
+await redis.set("circuit:users-api", JSON.stringify(state));
+
+// Later, restore from JSON
+const restored = CircuitBreaker.fromJSON(JSON.parse(await redis.get("circuit:users-api")));
+```
+
+Note: Callbacks (`onOpen`, `onHalfOpen`, `onClose`) and event listeners are NOT serialized — they must be re-attached after restoration.
 
 ---
 
@@ -436,26 +487,16 @@ class ResilientAPIClient {
     const url = `${this.opts.baseURL}${path}`;
 
     return this.cb.call(async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        this.opts.timeout ?? 5000
-      );
+      const res = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(this.opts.timeout ?? 5000),
+      });
 
-      try {
-        const res = await fetch(url, {
-          ...init,
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-
-        return res.json() as Promise<T>;
-      } finally {
-        clearTimeout(timeout);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
+
+      return res.json() as Promise<T>;
     });
   }
 

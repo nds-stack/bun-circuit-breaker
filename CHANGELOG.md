@@ -3,21 +3,33 @@
 ## [0.1.0-beta.0] — 2026-05-27
 
 ### Added
-- Rolling window failure counting via `failureRateThreshold`, `rollingWindow`, and `minimumCalls` options — time-based circuit opening alongside the existing consecutive threshold (#1)
-- Benchmark comparison against opossum and cockatiel with real throughput data
+- Rolling window failure counting via `failureRateThreshold`, `rollingWindow`, and `minimumCalls` options — time-based circuit opening alongside the existing consecutive threshold
+- Benchmark comparison against opossum (v9.0.0) and cockatiel (v4.0.0) with real throughput data
 - `CircuitStats.rollingFailureRate`, `CircuitStats.rollingCallsInWindow`, `CircuitStats.failureRateThreshold`
-- Input validation for all rolling window options
-- `maxPending` option to bound promise-chain mutex queue (default 1000) — prevents unbounded memory growth
-- Listener limit (max 100 per event) on `on()` — prevents unbounded `#listeners` Map growth
+- Input validation for all options: threshold, resetTimeout, successThreshold, failureRateThreshold, rollingWindow, minimumCalls, maxPending, maxListeners
+- `maxPending` option (default 1000) — bounds promise-chain mutex queue, prevents unbounded memory growth
+- `maxListeners` option (default 100) — configurable listener limit per event
+- `CircuitBreakerQueueFullError` with distinct `code: 'CIRCUIT_BREAKER_QUEUE_FULL'` — separate from `CircuitBreakerOpenError`
+- `removeAllListeners(event?)` method — remove listeners for an event or all events
+- `call(fn, signal?)` — optional `AbortSignal` support for cancellation
+- `toJSON()` / `fromJSON()` — state serialization for serverless cold-start recovery
+- `onOpen`/`onHalfOpen`/`onClose` callbacks now safely wrapped in try/catch (`#safeCallback`)
 
 ### Changed
+- `#synchronized` rewritten from promise-chain mutex to **linked-list queue** — O(1) enqueue/dequeue, zero-alloc fast-path when no contention
+- Timer-based half-open transition — `Bun.sleep(resetTimeout)` on open automatically transitions to half-open, eliminating `performance.now()` overhead in fast-path rejection
+- `reset()` no longer clears event listeners (use `removeAllListeners()` explicitly)
+- `reset()` no longer forcibly drains the queue — lets linked-list drain naturally
 - `stats()` now conditionally includes rolling window fields when `failureRateThreshold` is configured
-- Benchmark script now compares bun-circuit-breaker against opossum (v9.0.0) and cockatiel (v4.0.0)
-- `#synchronized` mutex now bounded by `maxPending` (default 1000) — rejects with `CircuitBreakerOpenError` when queue is full
-- `#pruneRolling` uses `while+shift()` instead of `filter()` — avoids array allocation on every failure
-- `on()` now limits listeners to 100 per event — warns and skips if exceeded
 - Benchmark table now includes "Overhead vs opossum" column
 - `tsconfig.json`: `noUnusedLocals` and `noUnusedParameters` set to `true`
+- `.gitignore`: `bench/competitors/` → `bench/Competitor/` (casing consistency)
+
+### Fixed
+- `forceOpen()` / `forceClose()` now use `#transitionTo()` (was `#setState()` directly) — prevents double-counting openCount and re-firing events
+- `#emit()` copies Set before iterating — safe against handler re-entrancy
+- `on()`/`off()` validate handler is a function — throws `TypeError` otherwise
+- `failureRateThreshold: 1.0` now correctly rejected (was erroneously allowed)
 
 ## [0.1.0-alpha.1] — 2026-05-26
 
