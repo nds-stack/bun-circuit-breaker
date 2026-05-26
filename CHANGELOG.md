@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.0-alpha.1] — 2026-05-26
+
+### Added
+- Input validation for constructor options (threshold, resetTimeout, successThreshold)
+- `console.warn` for event handler errors (was silent-swallow)
+- `#listeners.clear()` in `reset()` to prevent listener leak
+
+### Fixed
+- `forceOpen()` / `forceClose()` now async through mutex (race condition)
+- `off()` cleans up empty Set entries from Map
+- Missing `clean` script added
+- Bench script fixed (`bun run` → `bun test`)
+- Import extensions changed to `.js` for declaration file compatibility
+
 ## [0.1.0-alpha.0] — 2026-05-26
 
 ### Added

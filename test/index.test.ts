@@ -91,7 +91,7 @@ describe("CircuitBreaker", () => {
     try { await cb.call(rejectFn()); } catch { }
     try { await cb.call(rejectFn()); } catch { }
     expect(cb.stats().totalCalls).toBe(3);
-    cb.reset();
+    await cb.reset();
     const s = cb.stats();
     expect(cb.state).toBe("closed");
     expect(s.totalCalls).toBe(0);

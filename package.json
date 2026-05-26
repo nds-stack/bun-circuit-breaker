@@ -1,6 +1,6 @@
 {
   "name": "@nds-stack/bun-circuit-breaker",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Zero-dependency circuit breaker for Bun — fail-fast resilience with closed/open/half-open state machine.",
   "author": "nds-stack <nds.stack@gmail.com>",
   "type": "module",
@@ -15,8 +15,9 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build ./src/index.ts --outdir=./dist --target=bun --format=esm && tsc -p tsconfig.build.json",
-    "bench": "bun run bench/circuit-breaker.bench.ts",
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build ./src/index.ts --outdir=./dist --target=bun --format=esm && tsc -p tsconfig.build.json",
+    "bench": "bun test bench/circuit-breaker.bench.ts",
     "prepublishOnly": "bun run typecheck && bun test && bun run build"
   },
   "files": [

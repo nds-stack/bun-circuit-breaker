@@ -116,19 +116,21 @@ export class CircuitBreaker {
     });
   }
 
-  reset(): void {
-    this.#state = 'closed';
-    this.#failureCount = 0;
-    this.#consecutiveFailures = 0;
-    this.#successCount = 0;
-    this.#halfOpenSuccesses = 0;
-    this.#totalCalls = 0;
-    this.#openCount = 0;
-    this.#lastFailure = undefined;
-    this.#lastSuccess = undefined;
-    this.#startTime = performance.now();
-    this.#lastOpenTime = 0;
-    this.#listeners.clear();
+  async reset(): Promise<void> {
+    return this.#synchronized(async () => {
+      this.#state = 'closed';
+      this.#failureCount = 0;
+      this.#consecutiveFailures = 0;
+      this.#successCount = 0;
+      this.#halfOpenSuccesses = 0;
+      this.#totalCalls = 0;
+      this.#openCount = 0;
+      this.#lastFailure = undefined;
+      this.#lastSuccess = undefined;
+      this.#startTime = performance.now();
+      this.#lastOpenTime = 0;
+      this.#listeners.clear();
+    });
   }
 
   on(event: EventName, handler: () => void): void {
