@@ -2,10 +2,7 @@
 
 > Zero-dependency circuit breaker for Bun — fail-fast resilience with closed/open/half-open state machine.
 
-[![npm version](https://img.shields.io/npm/v/%40nds-stack%2Fbun-circuit-breaker?color=blue&logo=npm)](https://www.npmjs.com/package/@nds-stack/bun-circuit-breaker)
-[![Bun](https://img.shields.io/badge/Bun-%3E%3D1.3.0-black?logo=bun)](https://bun.sh)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue?logo=typescript)](https://www.typescriptlang.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/%40nds-stack%2Fbun-circuit-breaker?color=blue&logo=npm)](https://www.npmjs.com/package/@nds-stack/bun-circuit-breaker) [![Bun](https://img.shields.io/badge/Bun-%3E%3D1.3.0-black?logo=bun)](https://bun.sh) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue?logo=typescript)](https://www.typescriptlang.org) [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
 
