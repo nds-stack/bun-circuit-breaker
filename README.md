@@ -364,14 +364,14 @@ class ServiceClient {
 
 | Operation | `@nds-stack/bun-circuit-breaker` | `opossum` | `cockatiel` | Overhead vs opossum |
 |-----------|:---:|:---:|:---:|:---:|
-| Baseline (no CB) | **2,266,528** 🏆 | — | — | — |
-| Persistent (success) | **891,556** 🏆 | 512,222 | 888,467 | **+74%** |
-| Per-instance (success) | **694,003** 🏆 | — | — | — |
-| Open rejection | 273,001 | **433,064** 🏆 | — | -37% |
+| Baseline (no CB) | **1,850,947** 🏆 | — | — | — |
+| Persistent (success) | 718,084 | 457,842 | **846,650** 🏆 | **+57%** |
+| Per-instance (success) | **535,030** 🏆 | — | — | — |
+| Open rejection | 196,021 | **352,320** 🏆 | — | -44% |
 
-> **Note:** \`@nds-stack/bun-circuit-breaker\` ties or beats both competitors on persistent throughput thanks to zero-dependency overhead and Bun-native optimization. The promise-chain mutex guarantees **thread-safe state transitions** under concurrent calls — essential for correctness in real-world workloads.
+> **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that `@nds-stack/bun-circuit-breaker` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
 >
-> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **74% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> Against opossum, `@nds-stack/bun-circuit-breaker` is still **57% faster** while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
 
 To reproduce: `bun install && bun run bench`
 

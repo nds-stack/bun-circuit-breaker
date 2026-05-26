@@ -109,6 +109,19 @@ function fmt(n: number): string {
     return "0%";
   }
 
+  function persNote(): string {
+    const fastest = persistentWinner;
+    const pct = overheadPersistent;
+    const m = "`@nds-stack/bun-circuit-breaker`";
+    if (fastest === "nds") {
+      return `Against opossum (the most popular Node.js circuit breaker), ${m} is **${pct}% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.`;
+    }
+    if (fastest === "cockatiel") {
+      return `cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that ${m} guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.\n>\n> Against opossum, ${m} is still **${pct}% faster** while being **zero-dependency**, **Bun-native**, and **~260× smaller**.`;
+    }
+    return `${m} matches or exceeds both competitors on persistent throughput — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.`;
+  }
+
   const markdownTable = `
 ### Methodology
 - Each operation: average of **${rounds} rounds × ${iterations} iterations × ${samples} samples**
@@ -124,9 +137,7 @@ function fmt(n: number): string {
 | Per-instance (success) | ${cell(ndsPerInstance, true)} | — | — | — |
 | Open rejection | ${cell(ndsOpenResult, openWinner === "nds")} | ${cell(opossumOpenResult, openWinner === "opossum")} | — | ${overhead(overheadOpen)} |
 
-> **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that \`@nds-stack/bun-circuit-breaker\` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
->
-> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **${overheadPersistent}% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> **Note:** ${persNote()}
 
 To reproduce: \`bun install && bun run bench\`
 `;

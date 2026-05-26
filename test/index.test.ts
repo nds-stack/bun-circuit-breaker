@@ -1,10 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { CircuitBreaker, CircuitBreakerOpenError } from "../src/index.ts";
 
-async function delay(ms: number): Promise<void> {
-  await Bun.sleep(ms);
-}
-
 function rejectFn(msg = "fail"): () => Promise<never> {
   return () => Promise.reject(new Error(msg));
 }
@@ -47,7 +43,7 @@ describe("CircuitBreaker", () => {
     const cb = new CircuitBreaker({ threshold: 1, resetTimeout: 50 });
     try { await cb.call(rejectFn()); } catch { }
     expect(cb.state).toBe("open");
-    await delay(60);
+    await Bun.sleep(60);
     try { await cb.call(resolveFn("after timeout")); } catch { }
     expect(cb.state).toBe("closed");
   });
@@ -56,7 +52,7 @@ describe("CircuitBreaker", () => {
     const cb = new CircuitBreaker({ threshold: 1, resetTimeout: 50, successThreshold: 2 });
     try { await cb.call(rejectFn()); } catch { }
     expect(cb.state).toBe("open");
-    await delay(60);
+    await Bun.sleep(60);
     await cb.call(resolveFn("first"));
     expect(cb.state).toBe("half-open");
     await cb.call(resolveFn("second"));
@@ -127,7 +123,7 @@ describe("CircuitBreaker", () => {
     });
     try { await cb.call(rejectFn()); } catch { }
     expect(events).toEqual(["open"]);
-    await delay(60);
+    await Bun.sleep(60);
     await cb.call(resolveFn("ok"));
     expect(events).toEqual(["open", "half-open", "close"]);
   });
@@ -175,7 +171,7 @@ describe("CircuitBreaker", () => {
     for (let cycle = 0; cycle < 5; cycle++) {
       try { await cb.call(rejectFn(`cycle-${cycle}`)); } catch { }
       expect(cb.state).toBe("open");
-      await delay(15);
+      await Bun.sleep(15);
       await cb.call(resolveFn(`ok-${cycle}`));
       expect(cb.state).toBe("closed");
     }
@@ -190,22 +186,21 @@ describe("CircuitBreaker", () => {
     const cb = new CircuitBreaker({ threshold: 1, resetTimeout: 50 });
     try { await cb.call(rejectFn()); } catch { }
     expect(cb.state).toBe("open");
-    await delay(60);
+    await Bun.sleep(60);
     try { await cb.call(rejectFn("fail in half-open")); } catch { }
     expect(cb.state).toBe("open");
     const s = cb.stats();
     expect(s.openCount).toBe(2);
   });
 
-  test("concurrent calls are serialized", async () => {
-    const cb = new CircuitBreaker({ threshold: 2, resetTimeout: 100 });
-    const tasks = [
-      cb.call(resolveFn("a")),
-      cb.call(resolveFn("b")),
-      cb.call(rejectFn("c")),
-    ];
-    const results = await Promise.allSettled(tasks);
-    expect(results.filter(r => r.status === "fulfilled").length).toBeGreaterThanOrEqual(2);
+  test("concurrent calls are serialized in FIFO order", async () => {
+    const order: number[] = [];
+    const cb = new CircuitBreaker({ threshold: 5, resetTimeout: 100 });
+    const t1 = cb.call(async () => { order.push(1); await Bun.sleep(5); order.push(1); return "a"; });
+    const t2 = cb.call(async () => { order.push(2); return "b"; });
+    const t3 = cb.call(async () => { order.push(3); return "c"; });
+    await Promise.all([t1, t2, t3]);
+    expect(order).toEqual([1, 1, 2, 3]);
   });
 
   test("removeAllListeners clears all handlers", async () => {
@@ -240,7 +235,7 @@ describe("CircuitBreaker", () => {
     });
     try { await cb.call(rejectFn()); } catch { }
     expect(cb.state).toBe("open");
-    await delay(60);
+    await Bun.sleep(60);
     await cb.call(resolveFn("ok"));
     expect(cb.state).toBe("closed");
   });
@@ -326,7 +321,7 @@ describe("Rolling Window", () => {
       minimumCalls: 1,
     });
     await cb.call(resolveFn("ok"));
-    await delay(120);
+    await Bun.sleep(120);
     try { await cb.call(rejectFn()); } catch { }
     const s = cb.stats();
     expect(s.rollingCallsInWindow).toBe(1);
