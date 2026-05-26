@@ -1,0 +1,7 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "@nds-stack/bun-circuit-breaker",
+  "description": "Zero-dependency circuit breaker for Bun — fail-fast resilience with closed/open/half-open state machine.",
+  "url": "https://context7.com/nds-stack/bun-circuit-breaker",
+  "public_key": "pk_Zd1vpPPhPhvxg6ZjZWp5g"
+}

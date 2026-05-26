@@ -1,0 +1,10 @@
+context7.json
+*.md
+!README.md
+test/
+bench/
+examples/
+.eslintrc*
+tsconfig.json
+*.test.ts
+*.bench.ts
