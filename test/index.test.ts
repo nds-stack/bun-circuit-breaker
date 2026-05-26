@@ -156,7 +156,7 @@ describe("CircuitBreaker", () => {
     expect(s.totalCalls).toBe(3);
   });
 
-  test("edge case: threshold=0 (open immediately)", async () => {
+  test("edge case: threshold=0 (opens after first failure)", async () => {
     const cb = new CircuitBreaker({ threshold: 0 });
     try { await cb.call(rejectFn()); } catch { }
     expect(cb.state).toBe("open");
@@ -206,5 +206,161 @@ describe("CircuitBreaker", () => {
     ];
     const results = await Promise.allSettled(tasks);
     expect(results.filter(r => r.status === "fulfilled").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("removeAllListeners clears all handlers", async () => {
+    const cb = new CircuitBreaker({ threshold: 1, resetTimeout: 50 });
+    let count = 0;
+    cb.on("open", () => count++);
+    cb.on("open", () => count++);
+    expect(cb.removeAllListeners).toBeFunction();
+    cb.removeAllListeners("open");
+    try { await cb.call(rejectFn()); } catch { }
+    expect(count).toBe(0);
+  });
+
+  test("removeAllListeners without event clears all events", () => {
+    const cb = new CircuitBreaker();
+    cb.on("open", () => {});
+    cb.on("close", () => {});
+    cb.on("half-open", () => {});
+    cb.removeAllListeners();
+    expect(() => {
+      cb.on("open", () => {});
+    }).not.toThrow();
+  });
+
+  test("callbacks that throw are caught and do not corrupt state", async () => {
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      resetTimeout: 50,
+      onOpen: () => { throw new Error("onOpen crashed"); },
+      onHalfOpen: () => { throw new Error("onHalfOpen crashed"); },
+      onClose: () => { throw new Error("onClose crashed"); },
+    });
+    try { await cb.call(rejectFn()); } catch { }
+    expect(cb.state).toBe("open");
+    await delay(60);
+    await cb.call(resolveFn("ok"));
+    expect(cb.state).toBe("closed");
+  });
+});
+
+describe("Rolling Window", () => {
+  test("rolling window is disabled by default", () => {
+    const cb = new CircuitBreaker();
+    const s = cb.stats();
+    expect(s.rollingFailureRate).toBeUndefined();
+    expect(s.rollingCallsInWindow).toBeUndefined();
+    expect(s.failureRateThreshold).toBeUndefined();
+  });
+
+  test("opens circuit when failure rate exceeds threshold", async () => {
+    const cb = new CircuitBreaker({
+      failureRateThreshold: 0.5,
+      rollingWindow: 5000,
+      minimumCalls: 4,
+    });
+    await cb.call(resolveFn("ok"));
+    await cb.call(resolveFn("ok"));
+    try { await cb.call(rejectFn()); } catch { }
+    try { await cb.call(rejectFn()); } catch { }
+    expect(cb.state).toBe("open");
+  });
+
+  test("does not open below minimumCalls even if rate is high", async () => {
+    const cb = new CircuitBreaker({
+      failureRateThreshold: 0.5,
+      rollingWindow: 5000,
+      minimumCalls: 10,
+    });
+    try { await cb.call(rejectFn()); } catch { }
+    try { await cb.call(rejectFn()); } catch { }
+    expect(cb.state).toBe("closed");
+  });
+
+  test("does not open when failure rate is below threshold", async () => {
+    const cb = new CircuitBreaker({
+      failureRateThreshold: 0.8,
+      rollingWindow: 5000,
+      minimumCalls: 3,
+    });
+    await cb.call(resolveFn("ok"));
+    await cb.call(resolveFn("ok"));
+    try { await cb.call(rejectFn()); } catch { }
+    expect(cb.state).toBe("closed");
+  });
+
+  test("stats include rolling window data when enabled", async () => {
+    const cb = new CircuitBreaker({
+      failureRateThreshold: 0.5,
+      rollingWindow: 5000,
+      minimumCalls: 3,
+    });
+    await cb.call(resolveFn("ok"));
+    try { await cb.call(rejectFn()); } catch { }
+    await cb.call(resolveFn("ok"));
+    const s = cb.stats();
+    expect(s.failureRateThreshold).toBe(0.5);
+    expect(s.rollingCallsInWindow).toBe(3);
+    expect(s.rollingFailureRate).toBeCloseTo(1 / 3, 1);
+  });
+
+  test("rolling window resets with reset()", async () => {
+    const cb = new CircuitBreaker({
+      failureRateThreshold: 0.5,
+      rollingWindow: 5000,
+      minimumCalls: 3,
+    });
+    await cb.call(resolveFn("ok"));
+    try { await cb.call(rejectFn()); } catch { }
+    await cb.reset();
+    const s = cb.stats();
+    expect(s.rollingCallsInWindow).toBe(0);
+  });
+
+  test("rolling window prunes old entries", async () => {
+    const cb = new CircuitBreaker({
+      failureRateThreshold: 0.1,
+      rollingWindow: 100,
+      minimumCalls: 1,
+    });
+    await cb.call(resolveFn("ok"));
+    await delay(120);
+    try { await cb.call(rejectFn()); } catch { }
+    const s = cb.stats();
+    expect(s.rollingCallsInWindow).toBe(1);
+    expect(s.rollingFailureRate).toBe(1);
+  });
+
+  test("constructor validates failureRateThreshold", () => {
+    expect(() => new CircuitBreaker({ failureRateThreshold: -0.1 })).toThrow(RangeError);
+    expect(() => new CircuitBreaker({ failureRateThreshold: 1.5 })).toThrow(RangeError);
+    expect(() => new CircuitBreaker({ failureRateThreshold: NaN })).toThrow(RangeError);
+  });
+
+  test("constructor validates rollingWindow", () => {
+    expect(() => new CircuitBreaker({ rollingWindow: 50 })).toThrow(RangeError);
+    expect(() => new CircuitBreaker({ rollingWindow: NaN })).toThrow(RangeError);
+  });
+
+  test("constructor validates minimumCalls", () => {
+    expect(() => new CircuitBreaker({ minimumCalls: 0 })).toThrow(RangeError);
+    expect(() => new CircuitBreaker({ minimumCalls: NaN })).toThrow(RangeError);
+  });
+
+  test("rolling window works with consecutive threshold (both trip)", async () => {
+    const cb = new CircuitBreaker({
+      threshold: 5,
+      failureRateThreshold: 0.5,
+      rollingWindow: 5000,
+      minimumCalls: 4,
+    });
+    await cb.call(resolveFn("ok"));
+    await cb.call(resolveFn("ok"));
+    try { await cb.call(rejectFn()); } catch { }
+    try { await cb.call(rejectFn()); } catch { }
+    expect(cb.state).toBe("open");
+    expect(cb.stats().rollingFailureRate).toBe(0.5);
   });
 });

@@ -41,6 +41,9 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 | `threshold` | `number` | `5` | Number of consecutive failures before opening the circuit |
 | `resetTimeout` | `number` | `30000` | Milliseconds to wait before transitioning to half-open |
 | `successThreshold` | `number` | `1` | Number of consecutive successes in half-open to close the circuit |
+| `failureRateThreshold` | `number` | — | Failure rate (0–1) within rolling window to open circuit. When set, enables time-based failure counting alongside consecutive failure tracking. |
+| `rollingWindow` | `number` | `10000` | Time window in milliseconds for failure rate calculation. Only used when `failureRateThreshold` is set. |
+| `minimumCalls` | `number` | `10` | Minimum calls required within the rolling window before rate-based circuit opening activates. Only used when `failureRateThreshold` is set. |
 | `onOpen` | `() => void` | — | Callback when circuit opens |
 | `onHalfOpen` | `() => void` | — | Callback when circuit becomes half-open |
 | `onClose` | `() => void` | — | Callback when circuit closes |
@@ -78,6 +81,9 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 | `lastFailure` | `{ error, timestamp } \| undefined` | Details of last failure |
 | `lastSuccess` | `{ timestamp } \| undefined` | Timestamp of last success |
 | `uptime` | `number` | Milliseconds since creation or last reset |
+| `rollingFailureRate` | `number \| undefined` | Current failure rate within the rolling window (only present when `failureRateThreshold` is set) |
+| `rollingCallsInWindow` | `number \| undefined` | Total calls within the current rolling window (only present when `failureRateThreshold` is set) |
+| `failureRateThreshold` | `number \| undefined` | Configured failure rate threshold (only present when set) |
 
 ---
 
@@ -110,6 +116,15 @@ try {
 ### Propagated Errors
 When the circuit is **closed** or **half-open** and the wrapped function throws, the error propagates to the caller. The circuit breaker tracks the failure but does not swallow or modify the error.
 
+### Validation Errors
+Constructor throws `RangeError` for invalid option values:
+- `threshold` must be >= 0
+- `resetTimeout` must be >= 0
+- `successThreshold` must be >= 1
+- `failureRateThreshold` must be between 0 and 1 (exclusive, when set)
+- `rollingWindow` must be >= 100ms
+- `minimumCalls` must be >= 1
+
 ### Silent Handling
 - Event handler errors are silently caught to prevent handler exceptions from breaking state transitions
 - Callback options (`onOpen`, `onHalfOpen`, `onClose`) that throw are caught and ignored
@@ -121,10 +136,65 @@ When the circuit is **closed** or **half-open** and the wrapped function throws,
 | Limitation | Description |
 |------------|-------------|
 | **In-process only** | Circuit state is local to the current process. Multi-instance deployments need a shared state store. |
-| **Consecutive counting** | Failure counting is reset on success in closed state. For time-window based counting, wrap with a sliding window counter. |
+| **Consecutive counting** | Consecutive failure counting resets on success in closed state. Enable `failureRateThreshold` for time-window based counting. |
 | **No async hooks** | The mutex pattern ensures sequential state transitions but does not use async hooks / async context tracking. |
+| **Stale stats reads** | `stats()` reads counters outside the mutex for performance. During an active `call()`, `totalCalls` may already be incremented while `successCount` / `failureCount` are not yet updated. |
 | **No network awareness** | Circuit breaker is logic-only. It doesn't detect network partitions; it counts failures from the wrapped function. |
 | **No built-in retry** | Combine with `bun-retry` for retry-with-circuit-breaker pattern. |
+
+---
+
+## Rolling Window (Time-Based Failure Counting)
+
+In addition to consecutive failure counting (`threshold`), you can enable rolling window failure rate detection. This is useful for services that have intermittent failures — where the failure rate stays high enough to warrant opening the circuit, even though consecutive failures keep getting reset by occasional successes.
+
+### How It Works
+
+When `failureRateThreshold` is set, every call (success or failure) is recorded in time buckets within a sliding `rollingWindow`. After each failure in `closed` state, the circuit breaker checks if the failure rate within the window exceeds the threshold **and** the minimum number of calls has been met.
+
+```
+closed state:
+  consecutive failures ≥ threshold   → open (immediate, existing)
+  OR
+  calls in window ≥ minimumCalls AND
+  failure rate within window ≥ failureRateThreshold → open (time-based)
+```
+
+### Configuration
+
+```typescript
+import { CircuitBreaker } from "@nds-stack/bun-circuit-breaker";
+
+const cb = new CircuitBreaker({
+  // Consecutive failure tracking (still active)
+  threshold: 10,
+
+  // Rolling window (optional, time-based)
+  failureRateThreshold: 0.5,      // Open if 50%+ of requests fail within the window
+  rollingWindow: 10000,           // 10-second rolling window
+  minimumCalls: 20,               // Require at least 20 calls before evaluating
+});
+```
+
+### When to Use Rolling Window
+
+| Scenario | Consecutive (threshold) | Rolling Window |
+|----------|------------------------|----------------|
+| Service completely down | ✅ Opens fast | ✅ Opens within window |
+| Service intermittently failing (50% failure rate) | ❌ Might stay closed | ✅ Opens after minimumCalls |
+| Single call spike of failures | ✅ Opens fast | ✅ Opens but may be delayed |
+| Low-traffic endpoint (< minimumCalls per window) | ✅ Preferred | ❌ May never meet minimumCalls |
+
+### Stats Reflection
+
+When `failureRateThreshold` is configured, `stats()` includes:
+
+```typescript
+const s = cb.stats();
+console.log(s.rollingFailureRate);    // e.g., 0.33 (33% failure rate)
+console.log(s.rollingCallsInWindow);  // e.g., 15 calls in the last 10s
+console.log(s.failureRateThreshold);  // 0.5
+```
 
 ---
 
@@ -276,19 +346,29 @@ class ServiceClient {
 | Callbacks (onOpen/onClose) | ❌ | ✅ | ✅ | ✅ |
 | `performance.now()` timing | ❌ Date | ❌ Date | ❌ Date | ✅ |
 | Promise-chain mutex | ❌ | ❌ | ❌ | ✅ |
-| Bundle size | 0KB | ~10KB + deps | ~8KB + deps | **~1.5KB** |
+| Rolling window (time-based) | ❌ | ✅ (errorThresholdPercentage) | ✅ (SamplingBreaker) | ✅ (failureRateThreshold) |
+| Bundle size | 0KB | ~391KB | ~262KB | **~1.5KB** |
 | TypeScript strict | — | Partial | Partial | ✅ |
 
 ---
 
 ## Benchmarks
 
-Environment: Bun v1.3+, 5,000 iterations × 3 samples.
+Environment: Bun v1.3.14, 5,000 iterations × 3 samples (with warmup).
 
-| Operation | Throughput |
-|-----------|-----------|
-| **CircuitBreaker.call** (per-instance) | ~120K ops/s |
-| **CircuitBreaker.call** (persistent) | ~450K ops/s |
+| Operation | Throughput | vs opossum | vs cockatiel |
+|-----------|-----------|------------|--------------|
+| raw async fn (baseline, no CB) | 991K ops/s | — | — |
+| **@nds-stack/bun-circuit-breaker** (per-instance) | 233K ops/s | **+38%** | -23% |
+| **@nds-stack/bun-circuit-breaker** (persistent) | **266K ops/s** | **+58%** | -12% |
+| opossum (persistent) | 169K ops/s | — | — |
+| cockatiel (persistent) | 304K ops/s | — | — |
+| **@nds-stack/bun-circuit-breaker** (open rejection) | 130K ops/s | -46% | -57% |
+| opossum (open rejection) | 242K ops/s | — | — |
+
+> **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that `@nds-stack/bun-circuit-breaker` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
+>
+> Against opossum (the most popular Node.js circuit breaker), `@nds-stack/bun-circuit-breaker` is **58% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
 
 Performance tip: Reuse a single `CircuitBreaker` instance per endpoint/service for best throughput (avoid per-call construction overhead).
 

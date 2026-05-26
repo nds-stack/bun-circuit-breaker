@@ -9,6 +9,9 @@ export interface CircuitBreakerOptions {
   onOpen?: () => void;
   onHalfOpen?: () => void;
   onClose?: () => void;
+  failureRateThreshold?: number;
+  rollingWindow?: number;
+  minimumCalls?: number;
 }
 
 export interface CircuitStats {
@@ -20,9 +23,12 @@ export interface CircuitStats {
   lastFailure?: { error: string; timestamp: number };
   lastSuccess?: { timestamp: number };
   uptime: number;
+  rollingFailureRate?: number;
+  rollingCallsInWindow?: number;
+  failureRateThreshold?: number;
 }
 
-type EventName = 'open' | 'close' | 'half-open';
+export type EventName = 'open' | 'close' | 'half-open';
 
 interface InternalOptions {
   threshold: number;
@@ -31,6 +37,15 @@ interface InternalOptions {
   onOpen: (() => void) | null;
   onHalfOpen: (() => void) | null;
   onClose: (() => void) | null;
+  failureRateThreshold: number;
+  rollingWindow: number;
+  minimumCalls: number;
+}
+
+interface RollingBucket {
+  t: number;
+  fail: number;
+  total: number;
 }
 
 export class CircuitBreaker {
@@ -48,11 +63,17 @@ export class CircuitBreaker {
   #opts: InternalOptions;
   #mutex: Promise<void> = Promise.resolve();
   #listeners = new Map<EventName, Set<() => void>>();
+  #rollingBuckets: RollingBucket[] = [];
+  #bucketSpan: number;
 
   constructor(options: CircuitBreakerOptions = {}) {
+
     const threshold = options.threshold ?? 5;
     const resetTimeout = options.resetTimeout ?? 30000;
     const successThreshold = options.successThreshold ?? 1;
+    const failureRateThreshold = options.failureRateThreshold ?? 0;
+    const rollingWindow = options.rollingWindow ?? 10000;
+    const minimumCalls = options.minimumCalls ?? 10;
 
     if (threshold < 0 || !Number.isFinite(threshold)) {
       throw new RangeError(`CircuitBreaker: threshold must be >= 0, got ${threshold}`);
@@ -63,6 +84,15 @@ export class CircuitBreaker {
     if (successThreshold < 1 || !Number.isFinite(successThreshold)) {
       throw new RangeError(`CircuitBreaker: successThreshold must be >= 1, got ${successThreshold}`);
     }
+    if (failureRateThreshold !== 0 && (failureRateThreshold <= 0 || failureRateThreshold > 1 || !Number.isFinite(failureRateThreshold))) {
+      throw new RangeError(`CircuitBreaker: failureRateThreshold must be between 0 and 1, got ${failureRateThreshold}`);
+    }
+    if (rollingWindow < 100 || !Number.isFinite(rollingWindow)) {
+      throw new RangeError(`CircuitBreaker: rollingWindow must be >= 100ms, got ${rollingWindow}`);
+    }
+    if (minimumCalls < 1 || !Number.isFinite(minimumCalls)) {
+      throw new RangeError(`CircuitBreaker: minimumCalls must be >= 1, got ${minimumCalls}`);
+    }
 
     this.#opts = {
       threshold,
@@ -71,7 +101,11 @@ export class CircuitBreaker {
       onOpen: options.onOpen ?? null,
       onHalfOpen: options.onHalfOpen ?? null,
       onClose: options.onClose ?? null,
+      failureRateThreshold,
+      rollingWindow,
+      minimumCalls,
     };
+    this.#bucketSpan = Math.max(100, Math.floor(this.#opts.rollingWindow / 10));
     this.#startTime = performance.now();
   }
 
@@ -92,7 +126,8 @@ export class CircuitBreaker {
   }
 
   stats(): CircuitStats {
-    return {
+    const rollingStats = this.#getRollingStats();
+    const result: CircuitStats = {
       state: this.#state,
       successCount: this.#successCount,
       failureCount: this.#failureCount,
@@ -102,6 +137,12 @@ export class CircuitBreaker {
       lastSuccess: this.#lastSuccess ? { ...this.#lastSuccess } : undefined,
       uptime: performance.now() - this.#startTime,
     };
+    if (this.#opts.failureRateThreshold > 0) {
+      result.rollingFailureRate = rollingStats.rate;
+      result.rollingCallsInWindow = rollingStats.total;
+      result.failureRateThreshold = this.#opts.failureRateThreshold;
+    }
+    return result;
   }
 
   async forceOpen(): Promise<void> {
@@ -130,6 +171,7 @@ export class CircuitBreaker {
       this.#startTime = performance.now();
       this.#lastOpenTime = 0;
       this.#listeners.clear();
+      this.#rollingBuckets = [];
     });
   }
 
@@ -149,6 +191,14 @@ export class CircuitBreaker {
       if (existing.size === 0) {
         this.#listeners.delete(event);
       }
+    }
+  }
+
+  removeAllListeners(event?: EventName): void {
+    if (event) {
+      this.#listeners.delete(event);
+    } else {
+      this.#listeners.clear();
     }
   }
 
@@ -195,17 +245,24 @@ export class CircuitBreaker {
     if (state === 'open') {
       this.#openCount++;
       this.#lastOpenTime = performance.now();
-      this.#opts.onOpen?.();
+      this.#safeCallback(this.#opts.onOpen, 'onOpen');
       this.#emit('open');
     } else if (state === 'closed') {
       this.#consecutiveFailures = 0;
       this.#halfOpenSuccesses = 0;
-      this.#opts.onClose?.();
+      this.#safeCallback(this.#opts.onClose, 'onClose');
       this.#emit('close');
     } else if (state === 'half-open') {
       this.#halfOpenSuccesses = 0;
-      this.#opts.onHalfOpen?.();
+      this.#safeCallback(this.#opts.onHalfOpen, 'onHalfOpen');
       this.#emit('half-open');
+    }
+  }
+
+  #safeCallback(fn: (() => void) | null, name: string): void {
+    if (!fn) return;
+    try { fn(); } catch (e) {
+      console.error(`CircuitBreaker: "${name}" callback error:`, e);
     }
   }
 
@@ -222,6 +279,7 @@ export class CircuitBreaker {
   #onSuccess(): void {
     this.#successCount++;
     this.#lastSuccess = { timestamp: performance.now() };
+    this.#recordRolling(true);
 
     if (this.#state === 'half-open') {
       this.#halfOpenSuccesses++;
@@ -242,6 +300,7 @@ export class CircuitBreaker {
       error: error instanceof Error ? error.message : String(error),
       timestamp: performance.now(),
     };
+    this.#recordRolling(false);
 
     if (this.#state === 'half-open') {
       this.#transitionTo('open');
@@ -252,7 +311,59 @@ export class CircuitBreaker {
       this.#consecutiveFailures++;
       if (this.#consecutiveFailures >= this.#opts.threshold) {
         this.#transitionTo('open');
+        return;
+      }
+      if (this.#opts.failureRateThreshold > 0 && this.#checkRollingFailureRate()) {
+        this.#transitionTo('open');
+        return;
       }
     }
+  }
+
+  #recordRolling(success: boolean): void {
+    if (this.#opts.failureRateThreshold <= 0) return;
+    const now = performance.now();
+    this.#pruneRolling(now);
+    const lastBucket = this.#rollingBuckets[this.#rollingBuckets.length - 1];
+    if (!lastBucket || now - lastBucket.t >= this.#bucketSpan) {
+      this.#rollingBuckets.push({ t: now, fail: 0, total: 0 });
+    }
+    const bucket = this.#rollingBuckets[this.#rollingBuckets.length - 1];
+    if (bucket) {
+      bucket.total++;
+      if (!success) bucket.fail++;
+    }
+  }
+
+  #pruneRolling(now?: number): void {
+    const cutoff = (now ?? performance.now()) - this.#opts.rollingWindow;
+    while (this.#rollingBuckets.length > 0) {
+      const first = this.#rollingBuckets[0];
+      if (!first || first.t >= cutoff) break;
+      this.#rollingBuckets.shift();
+    }
+  }
+
+  #checkRollingFailureRate(): boolean {
+    this.#pruneRolling();
+    let totalFail = 0;
+    let totalCalls = 0;
+    for (const b of this.#rollingBuckets) {
+      totalFail += b.fail;
+      totalCalls += b.total;
+    }
+    return totalCalls >= this.#opts.minimumCalls && (totalFail / totalCalls) >= this.#opts.failureRateThreshold;
+  }
+
+  #getRollingStats(): { rate: number; total: number } {
+    if (this.#opts.failureRateThreshold <= 0) return { rate: 0, total: 0 };
+    this.#pruneRolling();
+    let totalFail = 0;
+    let totalCalls = 0;
+    for (const b of this.#rollingBuckets) {
+      totalFail += b.fail;
+      totalCalls += b.total;
+    }
+    return { rate: totalCalls > 0 ? totalFail / totalCalls : 0, total: totalCalls };
   }
 }

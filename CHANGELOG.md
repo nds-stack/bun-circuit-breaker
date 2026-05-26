@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-beta.0] — 2026-05-27
+
+### Added
+- Rolling window failure counting via `failureRateThreshold`, `rollingWindow`, and `minimumCalls` options — time-based circuit opening alongside the existing consecutive threshold (#1)
+- Benchmark comparison against opossum and cockatiel with real throughput data
+- `CircuitStats.rollingFailureRate`, `CircuitStats.rollingCallsInWindow`, `CircuitStats.failureRateThreshold`
+- Input validation for all rolling window options
+
+### Changed
+- `stats()` now conditionally includes rolling window fields when `failureRateThreshold` is configured
+- Benchmark script now compares bun-circuit-breaker against opossum (v9.0.0) and cockatiel (v4.0.0)
+
 ## [0.1.0-alpha.1] — 2026-05-26
 
 ### Added

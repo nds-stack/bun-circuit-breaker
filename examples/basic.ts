@@ -32,4 +32,4 @@ async function main() {
   console.log("\nFinal stats:", cb.stats());
 }
 
-main().catch(console.error);
+try { await main(); } catch (e) { console.error(e); }

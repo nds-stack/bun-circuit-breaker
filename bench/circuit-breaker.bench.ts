@@ -1,4 +1,6 @@
-import { CircuitBreaker } from "../src/index.ts";
+import { CircuitBreaker as NdsCircuitBreaker } from "../src/index.ts";
+import Opossum from "opossum";
+import { circuitBreaker, handleAll, ConsecutiveBreaker } from "cockatiel";
 
 const iterations = 5_000;
 const samples = 3;
@@ -26,35 +28,116 @@ function format(ops: number): string {
 (async () => {
   const results: Array<{ name: string; ops: number }> = [];
 
+  // --- Warmup ---
+  const warmupCb = new NdsCircuitBreaker({ threshold: 10000 });
+  for (let i = 0; i < 2000; i++) { await warmupCb.call(async () => "ok"); }
+
+  // --- Raw baseline (no circuit breaker) ---
   results.push({
-    name: "CircuitBreaker.call (success)",
+    name: "raw async fn (baseline)",
     ops: await bench(async () => {
-      const c = new CircuitBreaker({ threshold: 1000 });
+      await (async () => "ok")();
+    }),
+  });
+
+  // --- @nds-stack/bun-circuit-breaker (per-instance) ---
+  results.push({
+    name: "@nds-stack/bun-circuit-breaker (per-instance)",
+    ops: await bench(async () => {
+      const c = new NdsCircuitBreaker({ threshold: 1000 });
       await c.call(async () => "ok");
     }),
   });
 
-  const cbPersistent = new CircuitBreaker({ threshold: 10000 });
+  // --- @nds-stack/bun-circuit-breaker (persistent) ---
+  const cbPersistent = new NdsCircuitBreaker({ threshold: 10000 });
   results.push({
-    name: "CircuitBreaker.call (persistent, success)",
+    name: "@nds-stack/bun-circuit-breaker (persistent)",
     ops: await bench(async () => {
-      const c = cbPersistent;
-      await c.call(async () => "ok");
+      await cbPersistent.call(async () => "ok");
     }),
   });
 
-  console.log("\n--- bun-circuit-breaker Benchmark ---");
+  // --- opossum (persistent) ---
+  const opossumBreaker = new Opossum(async () => "ok", {
+    timeout: 10000,
+    errorThresholdPercentage: 99,
+    resetTimeout: 60000,
+    volumeThreshold: 10000,
+  });
+  results.push({
+    name: "opossum (persistent)",
+    ops: await bench(async () => {
+      await opossumBreaker.fire();
+    }),
+  });
+
+  // --- cockatiel (persistent) ---
+  const cockatielBreaker = circuitBreaker(handleAll, {
+    halfOpenAfter: 60000,
+    breaker: new ConsecutiveBreaker(10000),
+  });
+  results.push({
+    name: "cockatiel (persistent)",
+    ops: await bench(async () => {
+      await cockatielBreaker.execute(() => Promise.resolve("ok"));
+    }),
+  });
+
+  // --- @nds-stack/bun-circuit-breaker (open circuit rejection) ---
+  const cbOpen = new NdsCircuitBreaker({ threshold: 1, resetTimeout: 60000 });
+  try { await cbOpen.call(async () => { throw new Error("fail"); }); } catch { }
+  results.push({
+    name: "@nds-stack/bun-circuit-breaker (open rejection)",
+    ops: await bench(async () => {
+      try { await cbOpen.call(async () => "ok"); } catch { }
+    }),
+  });
+
+  // --- opossum (open circuit rejection) ---
+  const opossumOpen = new Opossum(async () => { throw new Error("fail"); }, {
+    errorThresholdPercentage: 1,
+    resetTimeout: 60000,
+    volumeThreshold: 1,
+  });
+  await opossumOpen.fire().catch(() => {});
+  await Bun.sleep(100);
+  results.push({
+    name: "opossum (open rejection)",
+    ops: await bench(async () => {
+      try { await opossumOpen.fire(); } catch { }
+    }),
+  });
+
+  console.log("\n--- Circuit Breaker Benchmark: @nds-stack vs Competitors ---");
   console.log(`Bun ${Bun.version}, ${iterations} iterations × ${samples} samples\n`);
 
   const opPad = results.reduce((m, r) => Math.max(m, r.name.length), 0);
   const pad = (s: string, n: number) => s.padEnd(n);
   const base = 2;
 
-  console.log(`${pad("Operation", opPad + base)} | ${pad("Throughput", 14)}`);
-  console.log(`${"-".repeat(opPad + base)}-|-${"-".repeat(14)}`);
+  const headerOp = pad("Operation", opPad + base);
+  const headerTp = pad("Throughput", 14);
+  const headerVs = pad("vs opossum", 14);
+  const headerVsCock = pad("vs cockatiel", 14);
+  console.log(`${headerOp} | ${headerTp} | ${headerVs} | ${headerVsCock}`);
+  console.log(`${"-".repeat(opPad + base)}-|-${"-".repeat(14)}-|-${"-".repeat(14)}-|-${"-".repeat(14)}`);
+
+  const opossumPersistent = results.find(r => r.name === "opossum (persistent)")?.ops ?? 1;
+  const cockatielPersistent = results.find(r => r.name === "cockatiel (persistent)")?.ops ?? 1;
 
   for (const r of results) {
-    console.log(`${pad(r.name, opPad + base)} | ${pad(format(r.ops), 14)}`);
+    const vsOpossum = r.name.includes("opossum") ? "—" :
+      r.name.includes("cockatiel") ? "—" :
+      r.ops >= opossumPersistent
+        ? `+${((r.ops / opossumPersistent - 1) * 100).toFixed(0)}%`
+        : `${((r.ops / opossumPersistent - 1) * 100).toFixed(0)}%`;
+    const vsCockatiel = r.name.includes("cockatiel") ? "—" :
+      r.name.includes("opossum") ? "—" :
+      r.ops >= cockatielPersistent
+        ? `+${((r.ops / cockatielPersistent - 1) * 100).toFixed(0)}%`
+        : `${((r.ops / cockatielPersistent - 1) * 100).toFixed(0)}%`;
+    console.log(`${pad(r.name, opPad + base)} | ${pad(format(r.ops), 14)} | ${pad(vsOpossum, 14)} | ${pad(vsCockatiel, 14)}`);
   }
 
   console.log("");

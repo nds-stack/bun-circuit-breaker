@@ -18,6 +18,7 @@
     "noImplicitOverride": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
-  }
+  "noPropertyAccessFromIndexSignature": false
+},
+"exclude": ["dist", "bench/competitors"]
 }
