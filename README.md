@@ -354,21 +354,25 @@ class ServiceClient {
 
 ## Benchmarks
 
-Environment: Bun v1.3.14, 5,000 iterations × 3 samples × 5 rounds (average).
+### Methodology
+- Each operation: average of **5 rounds × 5000 iterations × 3 samples**
+- Warmup: 2000 iterations before measurement
+- Hardware: Bun 1.3.14 (Windows, x64)
 
-| Operation | ops/s | vs opossum | vs cockatiel |
-|-----------|-------|------------|--------------|
-| raw async fn (baseline, no CB) | 2,195,502 | — | — |
-| **@nds-stack/bun-circuit-breaker** (per-instance) | 785,365 | **+35%** | -34% |
-| **@nds-stack/bun-circuit-breaker** (persistent) | **961,112** | **+65%** | -19% |
-| opossum (persistent) | 581,873 | — | — |
-| cockatiel (persistent) | 1,193,655 | +105% | — |
-| **@nds-stack/bun-circuit-breaker** (open rejection) | 313,979 | -33% | -74% |
-| opossum (open rejection) | 466,003 | — | — |
+### Results (ops/s — higher is better)
+
+| Operation | `@nds-stack/bun-circuit-breaker` | `opossum` | `cockatiel` |
+|-----------|:---:|:---:|:---:|
+| Baseline (no CB) | **2,275,635** 🏆 | — | — |
+| Persistent (success) | 786,137 | 428,732 | **983,901** 🏆 |
+| Per-instance (success) | **602,171** 🏆 | — | — |
+| Open rejection | 246,118 | **396,365** 🏆 | — |
 
 > **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that `@nds-stack/bun-circuit-breaker` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
 >
-> Against opossum (the most popular Node.js circuit breaker), `@nds-stack/bun-circuit-breaker` is **65% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> Against opossum (the most popular Node.js circuit breaker), `@nds-stack/bun-circuit-breaker` is **83% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+
+To reproduce: `bun install && bun run bench`
 
 Performance tip: Reuse a single `CircuitBreaker` instance per endpoint/service for best throughput (avoid per-call construction overhead).
 
