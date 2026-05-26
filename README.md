@@ -119,22 +119,20 @@ try {
 When the circuit is **closed** or **half-open** and the wrapped function throws, the error propagates to the caller. The circuit breaker tracks the failure but does not swallow or modify the error.
 
 ### Queue Full
-When the number of pending calls exceeds `maxPending` (default 1000), `call()` immediately throws `CircuitBreakerOpenError` without queueing. The error `code` is `CIRCUIT_BREAKER_OPEN` (same as circuit-open). Differentiate via `err.message` if needed:
+When the number of pending calls exceeds `maxPending` (default 1000), `call()` immediately throws `CircuitBreakerQueueFullError` without queueing. The error `code` is `CIRCUIT_BREAKER_QUEUE_FULL` — distinct from `CIRCUIT_BREAKER_OPEN` so you can handle each case:
 
 ```typescript
-import { CircuitBreaker, CircuitBreakerOpenError } from "@nds-stack/bun-circuit-breaker";
+import { CircuitBreaker, CircuitBreakerOpenError, CircuitBreakerQueueFullError } from "@nds-stack/bun-circuit-breaker";
 
 const cb = new CircuitBreaker({ maxPending: 5 });
 
 try {
   await cb.call(() => Promise.resolve("ok"));
 } catch (err) {
-  if (err instanceof CircuitBreakerOpenError) {
-    if ((err as Error).message.includes("queue full")) {
-      // Circuit breaker queue is full — retry with backoff
-    } else {
-      // Circuit is open — fail-fast
-    }
+  if (err instanceof CircuitBreakerQueueFullError) {
+    // Circuit breaker queue is full — retry with backoff
+  } else if (err instanceof CircuitBreakerOpenError) {
+    // Circuit is open — fail-fast
   }
 }
 ```
@@ -148,6 +146,9 @@ Constructor throws `RangeError` for invalid option values:
 - `rollingWindow` must be >= 100ms
 - `minimumCalls` must be >= 1
 - `maxPending` must be >= 1
+
+### CircuitBreakerQueueFullError
+Thrown when `call()` is invoked while the circuit breaker's pending queue has reached `maxPending`. This indicates backpressure — the system is overloaded. The `code` property is `CIRCUIT_BREAKER_QUEUE_FULL`, distinct from `CircuitBreakerOpenError` so you can handle queue-full and circuit-open differently.
 
 ### Silent Handling
 - Event handler errors are silently caught to prevent handler exceptions from breaking state transitions
