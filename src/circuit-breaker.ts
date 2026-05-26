@@ -156,13 +156,13 @@ export class CircuitBreaker {
 
   async forceOpen(): Promise<void> {
     return this.#synchronized(async () => {
-      this.#setState('open');
+      this.#transitionTo('open');
     });
   }
 
   async forceClose(): Promise<void> {
     return this.#synchronized(async () => {
-      this.#setState('closed');
+      this.#transitionTo('closed');
     });
   }
 

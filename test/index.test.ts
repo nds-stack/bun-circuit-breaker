@@ -379,9 +379,8 @@ describe("Rolling Window", () => {
 
   test("listener limit warns on excessive subscriptions", () => {
     const cb = new CircuitBreaker();
-    const handler = () => {};
     for (let i = 0; i < 100; i++) {
-      cb.on("open", handler);
+      cb.on("open", () => {});
     }
     expect(() => {
       cb.on("open", () => {});
