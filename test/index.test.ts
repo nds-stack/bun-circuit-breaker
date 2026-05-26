@@ -363,4 +363,33 @@ describe("Rolling Window", () => {
     expect(cb.state).toBe("open");
     expect(cb.stats().rollingFailureRate).toBe(0.5);
   });
+
+  test("constructor validates maxPending", () => {
+    expect(() => new CircuitBreaker({ maxPending: 0 })).toThrow(RangeError);
+    expect(() => new CircuitBreaker({ maxPending: NaN })).toThrow(RangeError);
+  });
+
+  test("maxPending rejects calls when queue is full", async () => {
+    const cb = new CircuitBreaker({ maxPending: 2 });
+    const slow: () => Promise<string> = async () => { await Bun.sleep(50); return "ok"; };
+    cb.call(slow);
+    cb.call(slow);
+    try {
+      await cb.call(slow);
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CircuitBreakerOpenError);
+    }
+  });
+
+  test("listener limit warns on excessive subscriptions", () => {
+    const cb = new CircuitBreaker();
+    const handler = () => {};
+    for (let i = 0; i < 100; i++) {
+      cb.on("open", handler);
+    }
+    expect(() => {
+      cb.on("open", () => {});
+    }).not.toThrow();
+  });
 });

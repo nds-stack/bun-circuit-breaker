@@ -12,6 +12,7 @@ export interface CircuitBreakerOptions {
   failureRateThreshold?: number;
   rollingWindow?: number;
   minimumCalls?: number;
+  maxPending?: number;
 }
 
 export interface CircuitStats {
@@ -40,6 +41,7 @@ interface InternalOptions {
   failureRateThreshold: number;
   rollingWindow: number;
   minimumCalls: number;
+  maxPending: number;
 }
 
 interface RollingBucket {
@@ -62,9 +64,11 @@ export class CircuitBreaker {
   #lastOpenTime = 0;
   #opts: InternalOptions;
   #mutex: Promise<void> = Promise.resolve();
+  #pending = 0;
   #listeners = new Map<EventName, Set<() => void>>();
   #rollingBuckets: RollingBucket[] = [];
   #bucketSpan: number;
+  #maxListeners = 100;
 
   constructor(options: CircuitBreakerOptions = {}) {
 
@@ -74,6 +78,7 @@ export class CircuitBreaker {
     const failureRateThreshold = options.failureRateThreshold ?? 0;
     const rollingWindow = options.rollingWindow ?? 10000;
     const minimumCalls = options.minimumCalls ?? 10;
+    const maxPending = options.maxPending ?? 1000;
 
     if (threshold < 0 || !Number.isFinite(threshold)) {
       throw new RangeError(`CircuitBreaker: threshold must be >= 0, got ${threshold}`);
@@ -93,6 +98,9 @@ export class CircuitBreaker {
     if (minimumCalls < 1 || !Number.isFinite(minimumCalls)) {
       throw new RangeError(`CircuitBreaker: minimumCalls must be >= 1, got ${minimumCalls}`);
     }
+    if (maxPending < 1 || !Number.isFinite(maxPending)) {
+      throw new RangeError(`CircuitBreaker: maxPending must be >= 1, got ${maxPending}`);
+    }
 
     this.#opts = {
       threshold,
@@ -104,6 +112,7 @@ export class CircuitBreaker {
       failureRateThreshold,
       rollingWindow,
       minimumCalls,
+      maxPending,
     };
     this.#bucketSpan = Math.max(100, Math.floor(this.#opts.rollingWindow / 10));
     this.#startTime = performance.now();
@@ -172,12 +181,17 @@ export class CircuitBreaker {
       this.#lastOpenTime = 0;
       this.#listeners.clear();
       this.#rollingBuckets = [];
+      this.#pending = 0;
     });
   }
 
   on(event: EventName, handler: () => void): void {
     const existing = this.#listeners.get(event);
     if (existing) {
+      if (existing.size >= this.#maxListeners) {
+        console.warn(`CircuitBreaker: max listeners (${this.#maxListeners}) exceeded for "${event}" — call not registered`);
+        return;
+      }
       existing.add(handler);
     } else {
       this.#listeners.set(event, new Set([handler]));
@@ -228,10 +242,16 @@ export class CircuitBreaker {
   }
 
   #synchronized<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.#pending >= this.#opts.maxPending) {
+      return Promise.reject(new CircuitBreakerOpenError(
+        `Circuit breaker queue full (max ${this.#opts.maxPending} pending)`
+      ));
+    }
+    this.#pending++;
     const prev = this.#mutex;
     let release: () => void;
     this.#mutex = new Promise<void>(resolve => { release = resolve; });
-    return prev.then(() => fn()).finally(() => release!());
+    return prev.then(() => fn()).finally(() => { this.#pending--; release!(); });
   }
 
   #transitionTo(state: CircuitState): void {
@@ -337,10 +357,8 @@ export class CircuitBreaker {
 
   #pruneRolling(now?: number): void {
     const cutoff = (now ?? performance.now()) - this.#opts.rollingWindow;
-    while (this.#rollingBuckets.length > 0) {
-      const first = this.#rollingBuckets[0];
-      if (!first || first.t >= cutoff) break;
-      this.#rollingBuckets.shift();
+    if (this.#rollingBuckets.length > 0 && this.#rollingBuckets[0]!.t < cutoff) {
+      this.#rollingBuckets = this.#rollingBuckets.filter(b => b.t >= cutoff);
     }
   }
 
