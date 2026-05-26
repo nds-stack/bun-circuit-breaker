@@ -41,9 +41,10 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 | `threshold` | `number` | `5` | Number of consecutive failures before opening the circuit |
 | `resetTimeout` | `number` | `30000` | Milliseconds to wait before transitioning to half-open |
 | `successThreshold` | `number` | `1` | Number of consecutive successes in half-open to close the circuit |
-| `failureRateThreshold` | `number` | — | Failure rate (0–1) within rolling window to open circuit. When set, enables time-based failure counting alongside consecutive failure tracking. |
+| `failureRateThreshold` | `number` | `0` (disabled) | Failure rate (0–1) within rolling window to open circuit. Set to a value between 0 and 1 to enable time-based failure counting alongside the existing consecutive threshold. |
 | `rollingWindow` | `number` | `10000` | Time window in milliseconds for failure rate calculation. Only used when `failureRateThreshold` is set. |
 | `minimumCalls` | `number` | `10` | Minimum calls required within the rolling window before rate-based circuit opening activates. Only used when `failureRateThreshold` is set. |
+| `maxPending` | `number` | `1000` | Maximum pending calls in the promise-chain mutex queue. Exceeding this immediately throws `CircuitBreakerOpenError` to prevent unbounded memory growth. |
 | `onOpen` | `() => void` | — | Callback when circuit opens |
 | `onHalfOpen` | `() => void` | — | Callback when circuit becomes half-open |
 | `onClose` | `() => void` | — | Callback when circuit closes |
@@ -59,6 +60,7 @@ new CircuitBreaker(options?: CircuitBreakerOptions)
 | `stats()` | `CircuitStats` | Get current circuit statistics |
 | `on(event, handler)` | `void` | Subscribe to state transition events |
 | `off(event, handler)` | `void` | Unsubscribe from state transition events |
+| `removeAllListeners(event?)` | `void` | Remove all listeners for an event, or all events if no event specified |
 
 ### Properties
 
@@ -116,6 +118,27 @@ try {
 ### Propagated Errors
 When the circuit is **closed** or **half-open** and the wrapped function throws, the error propagates to the caller. The circuit breaker tracks the failure but does not swallow or modify the error.
 
+### Queue Full
+When the number of pending calls exceeds `maxPending` (default 1000), `call()` immediately throws `CircuitBreakerOpenError` without queueing. The error `code` is `CIRCUIT_BREAKER_OPEN` (same as circuit-open). Differentiate via `err.message` if needed:
+
+```typescript
+import { CircuitBreaker, CircuitBreakerOpenError } from "@nds-stack/bun-circuit-breaker";
+
+const cb = new CircuitBreaker({ maxPending: 5 });
+
+try {
+  await cb.call(() => Promise.resolve("ok"));
+} catch (err) {
+  if (err instanceof CircuitBreakerOpenError) {
+    if ((err as Error).message.includes("queue full")) {
+      // Circuit breaker queue is full — retry with backoff
+    } else {
+      // Circuit is open — fail-fast
+    }
+  }
+}
+```
+
 ### Validation Errors
 Constructor throws `RangeError` for invalid option values:
 - `threshold` must be >= 0
@@ -124,6 +147,7 @@ Constructor throws `RangeError` for invalid option values:
 - `failureRateThreshold` must be between 0 and 1 (exclusive, when set)
 - `rollingWindow` must be >= 100ms
 - `minimumCalls` must be >= 1
+- `maxPending` must be >= 1
 
 ### Silent Handling
 - Event handler errors are silently caught to prevent handler exceptions from breaking state transitions
