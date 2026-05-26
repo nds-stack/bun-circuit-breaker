@@ -63,8 +63,9 @@ export class CircuitBreaker {
   #startTime: number;
   #lastOpenTime = 0;
   #opts: InternalOptions;
-  #mutex: Promise<void> = Promise.resolve();
   #pending = 0;
+  #busy = false;
+  #queue: Array<() => void> = [];
   #listeners = new Map<EventName, Set<() => void>>();
   #rollingBuckets: RollingBucket[] = [];
   #bucketSpan: number;
@@ -181,8 +182,9 @@ export class CircuitBreaker {
       this.#lastOpenTime = 0;
       this.#listeners.clear();
       this.#rollingBuckets = [];
+      this.#queue = [];
       this.#pending = 0;
-      this.#mutex = Promise.resolve();
+      this.#busy = false;
     });
   }
 
@@ -220,16 +222,19 @@ export class CircuitBreaker {
   }
 
   async call<T>(fn: () => Promise<T>): Promise<T> {
+    // Fast-path: circuit open and resetTimeout not yet expired → reject without queuing
+    if (this.#state === 'open') {
+      const elapsed = performance.now() - this.#lastOpenTime;
+      if (elapsed < this.#opts.resetTimeout) {
+        throw new CircuitBreakerOpenError(
+          `Circuit breaker is open (reset in ${Math.ceil((this.#opts.resetTimeout - elapsed) / 1000)}s)`
+        );
+      }
+    }
+
     return this.#synchronized(async () => {
       if (this.#state === 'open') {
-        const elapsed = performance.now() - this.#lastOpenTime;
-        if (elapsed >= this.#opts.resetTimeout) {
-          this.#transitionTo('half-open');
-        } else {
-          throw new CircuitBreakerOpenError(
-            `Circuit breaker is open (reset in ${Math.ceil((this.#opts.resetTimeout - elapsed) / 1000)}s)`
-          );
-        }
+        this.#transitionTo('half-open');
       }
 
       this.#totalCalls++;
@@ -244,8 +249,7 @@ export class CircuitBreaker {
     });
   }
 
-  // promise-chain mutex — cannot use async/await; need to chain onto prev promise
-  // #pending check is synchronous (outside chain) — safe in single-threaded JS
+  // Linked-list based serialization — zero-alloc when no contention
   #synchronized<T>(fn: () => Promise<T>): Promise<T> {
     if (this.#pending >= this.#opts.maxPending) {
       return Promise.reject(new CircuitBreakerOpenError(
@@ -253,10 +257,31 @@ export class CircuitBreaker {
       ));
     }
     this.#pending++;
-    const prev = this.#mutex;
-    let release: () => void;
-    this.#mutex = new Promise<void>(resolve => { release = resolve; });
-    return prev.then(() => fn()).finally(() => { this.#pending--; release!(); });
+
+    if (!this.#busy) {
+      this.#busy = true;
+      return this.#exec(fn);
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      this.#queue.push(() => {
+        this.#exec(fn).then(resolve, reject);
+      });
+    });
+  }
+
+  async #exec<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } finally {
+      this.#pending--;
+      const next = this.#queue.shift();
+      if (next) {
+        next();
+      } else {
+        this.#busy = false;
+      }
+    }
   }
 
   #transitionTo(state: CircuitState): void {
