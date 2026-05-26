@@ -262,7 +262,7 @@ export class CircuitBreaker {
   #safeCallback(fn: (() => void) | null, name: string): void {
     if (!fn) return;
     try { fn(); } catch (e) {
-      console.error(`CircuitBreaker: "${name}" callback error:`, e);
+      console.warn(`CircuitBreaker: "${name}" callback error:`, e);
     }
   }
 
