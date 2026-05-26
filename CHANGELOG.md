@@ -14,8 +14,10 @@
 - `stats()` now conditionally includes rolling window fields when `failureRateThreshold` is configured
 - Benchmark script now compares bun-circuit-breaker against opossum (v9.0.0) and cockatiel (v4.0.0)
 - `#synchronized` mutex now bounded by `maxPending` (default 1000) — rejects with `CircuitBreakerOpenError` when queue is full
-- `#pruneRolling` uses `filter()` instead of `shift()` — avoids O(n) array re-indexing
+- `#pruneRolling` uses `while+shift()` instead of `filter()` — avoids array allocation on every failure
 - `on()` now limits listeners to 100 per event — warns and skips if exceeded
+- Benchmark table now includes "Overhead vs opossum" column
+- `tsconfig.json`: `noUnusedLocals` and `noUnusedParameters` set to `true`
 
 ## [0.1.0-alpha.1] — 2026-05-26
 

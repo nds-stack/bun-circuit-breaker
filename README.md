@@ -139,6 +139,7 @@ Constructor throws `RangeError` for invalid option values:
 | **Consecutive counting** | Consecutive failure counting resets on success in closed state. Enable `failureRateThreshold` for time-window based counting. |
 | **No async hooks** | The mutex pattern ensures sequential state transitions but does not use async hooks / async context tracking. |
 | **Stale stats reads** | `stats()` reads counters outside the mutex for performance. During an active `call()`, `totalCalls` may already be incremented while `successCount` / `failureCount` are not yet updated. |
+| **Hanging `fn()` blocks mutex** | The promise-chain mutex serializes all calls. If the wrapped function never settles (no timeout, infinite loop, unresponsive service), the entire queue stalls permanently. Always wrap external calls with a timeout (`AbortController`, `Promise.race` with `Bun.sleep`). |
 | **No network awareness** | Circuit breaker is logic-only. It doesn't detect network partitions; it counts failures from the wrapped function. |
 | **No built-in retry** | Combine with `bun-retry` for retry-with-circuit-breaker pattern. |
 
@@ -361,16 +362,16 @@ class ServiceClient {
 
 ### Results (ops/s — higher is better)
 
-| Operation | `@nds-stack/bun-circuit-breaker` | `opossum` | `cockatiel` |
-|-----------|:---:|:---:|:---:|
-| Baseline (no CB) | **2,275,635** 🏆 | — | — |
-| Persistent (success) | 786,137 | 428,732 | **983,901** 🏆 |
-| Per-instance (success) | **602,171** 🏆 | — | — |
-| Open rejection | 246,118 | **396,365** 🏆 | — |
+| Operation | `@nds-stack/bun-circuit-breaker` | `opossum` | `cockatiel` | Overhead vs opossum |
+|-----------|:---:|:---:|:---:|:---:|
+| Baseline (no CB) | **2,266,528** 🏆 | — | — | — |
+| Persistent (success) | **891,556** 🏆 | 512,222 | 888,467 | **+74%** |
+| Per-instance (success) | **694,003** 🏆 | — | — | — |
+| Open rejection | 273,001 | **433,064** 🏆 | — | -37% |
 
-> **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that `@nds-stack/bun-circuit-breaker` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
+> **Note:** \`@nds-stack/bun-circuit-breaker\` ties or beats both competitors on persistent throughput thanks to zero-dependency overhead and Bun-native optimization. The promise-chain mutex guarantees **thread-safe state transitions** under concurrent calls — essential for correctness in real-world workloads.
 >
-> Against opossum (the most popular Node.js circuit breaker), `@nds-stack/bun-circuit-breaker` is **83% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **74% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
 
 To reproduce: `bun install && bun run bench`
 

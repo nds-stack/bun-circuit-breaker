@@ -7,7 +7,7 @@ coverage
 *.md
 !README.md
 !CHANGELOG.md
-bench/competitors/
+bench/Competitor/
 logs
 *.log
 .env

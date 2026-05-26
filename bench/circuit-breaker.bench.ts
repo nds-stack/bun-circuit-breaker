@@ -92,12 +92,22 @@ function fmt(n: number): string {
   const persistentBest = Math.max(persistentOps.nds, persistentOps.opossum, persistentOps.cockatiel);
   const persistentWinner = persistentBest === persistentOps.nds ? "nds" : persistentBest === persistentOps.opossum ? "opossum" : "cockatiel";
 
-  const perfOps = { nds: ndsPerInstance };
-  const perfWinner = "nds";
-
   const openOps = { nds: ndsOpenResult, opossum: opossumOpenResult };
   const openBest = Math.max(openOps.nds, openOps.opossum);
   const openWinner = openBest === openOps.nds ? "nds" : "opossum";
+
+  const overheadPersistent = Math.round((ndsPersistentResult / opossumResult - 1) * 100);
+  const overheadOpen = Math.round((ndsOpenResult / opossumOpenResult - 1) * 100);
+
+  function cell(ops: number, isWinner: boolean): string {
+    return isWinner ? `**${fmt(ops)}** 🏆` : fmt(ops);
+  }
+
+  function overhead(val: number): string {
+    if (val > 0) return `**+${val}%**`;
+    if (val < 0) return `${val}%`;
+    return "0%";
+  }
 
   const markdownTable = `
 ### Methodology
@@ -107,16 +117,16 @@ function fmt(n: number): string {
 
 ### Results (ops/s — higher is better)
 
-| Operation | \`@nds-stack/bun-circuit-breaker\` | \`opossum\` | \`cockatiel\` |
-|-----------|:---:|:---:|:---:|
-| Baseline (no CB) | **${fmt(baseline)}** 🏆 | — | — |
-| Persistent (success) | ${persistentWinner === "nds" ? "**" : ""}${fmt(ndsPersistentResult)}${persistentWinner === "nds" ? "** 🏆" : ""} | ${persistentWinner === "opossum" ? "**" : ""}${fmt(opossumResult)}${persistentWinner === "opossum" ? "** 🏆" : ""} | ${persistentWinner === "cockatiel" ? "**" : ""}${fmt(cockatielResult)}${persistentWinner === "cockatiel" ? "** 🏆" : ""} |
-| Per-instance (success) | ${perfWinner === "nds" ? "**" : ""}${fmt(ndsPerInstance)}${perfWinner === "nds" ? "** 🏆" : ""} | — | — |
-| Open rejection | ${openWinner === "nds" ? "**" : ""}${fmt(ndsOpenResult)}${openWinner === "nds" ? "** 🏆" : ""} | ${openWinner === "opossum" ? "**" : ""}${fmt(opossumOpenResult)}${openWinner === "opossum" ? "** 🏆" : ""} | — |
+| Operation | \`@nds-stack/bun-circuit-breaker\` | \`opossum\` | \`cockatiel\` | Overhead vs opossum |
+|-----------|:---:|:---:|:---:|:---:|
+| Baseline (no CB) | **${fmt(baseline)}** 🏆 | — | — | — |
+| Persistent (success) | ${cell(ndsPersistentResult, persistentWinner === "nds")} | ${cell(opossumResult, persistentWinner === "opossum")} | ${cell(cockatielResult, persistentWinner === "cockatiel")} | ${overhead(overheadPersistent)} |
+| Per-instance (success) | ${cell(ndsPerInstance, true)} | — | — | — |
+| Open rejection | ${cell(ndsOpenResult, openWinner === "nds")} | ${cell(opossumOpenResult, openWinner === "opossum")} | — | ${overhead(overheadOpen)} |
 
 > **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that \`@nds-stack/bun-circuit-breaker\` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
 >
-> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **${Math.round((ndsPersistentResult / opossumResult - 1) * 100)}% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **${overheadPersistent}% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
 
 To reproduce: \`bun install && bun run bench\`
 `;

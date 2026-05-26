@@ -357,8 +357,8 @@ export class CircuitBreaker {
 
   #pruneRolling(now?: number): void {
     const cutoff = (now ?? performance.now()) - this.#opts.rollingWindow;
-    if (this.#rollingBuckets.length > 0 && this.#rollingBuckets[0]!.t < cutoff) {
-      this.#rollingBuckets = this.#rollingBuckets.filter(b => b.t >= cutoff);
+    while (this.#rollingBuckets.length > 0 && this.#rollingBuckets[0]!.t < cutoff) {
+      this.#rollingBuckets.shift();
     }
   }
 
