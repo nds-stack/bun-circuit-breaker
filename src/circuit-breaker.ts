@@ -89,8 +89,8 @@ export class CircuitBreaker {
     if (successThreshold < 1 || !Number.isFinite(successThreshold)) {
       throw new RangeError(`CircuitBreaker: successThreshold must be >= 1, got ${successThreshold}`);
     }
-    if (failureRateThreshold !== 0 && (failureRateThreshold <= 0 || failureRateThreshold > 1 || !Number.isFinite(failureRateThreshold))) {
-      throw new RangeError(`CircuitBreaker: failureRateThreshold must be between 0 and 1, got ${failureRateThreshold}`);
+    if (failureRateThreshold !== 0 && (failureRateThreshold <= 0 || failureRateThreshold >= 1 || !Number.isFinite(failureRateThreshold))) {
+      throw new RangeError(`CircuitBreaker: failureRateThreshold must be between 0 and 1 (exclusive), got ${failureRateThreshold}`);
     }
     if (rollingWindow < 100 || !Number.isFinite(rollingWindow)) {
       throw new RangeError(`CircuitBreaker: rollingWindow must be >= 100ms, got ${rollingWindow}`);
@@ -182,6 +182,7 @@ export class CircuitBreaker {
       this.#listeners.clear();
       this.#rollingBuckets = [];
       this.#pending = 0;
+      this.#mutex = Promise.resolve();
     });
   }
 
@@ -244,6 +245,7 @@ export class CircuitBreaker {
   }
 
   // promise-chain mutex — cannot use async/await; need to chain onto prev promise
+  // #pending check is synchronous (outside chain) — safe in single-threaded JS
   #synchronized<T>(fn: () => Promise<T>): Promise<T> {
     if (this.#pending >= this.#opts.maxPending) {
       return Promise.reject(new CircuitBreakerOpenError(
@@ -292,7 +294,7 @@ export class CircuitBreaker {
   #emit(event: EventName): void {
     const handlers = this.#listeners.get(event);
     if (!handlers) return;
-    for (const h of handlers) {
+    for (const h of [...handlers]) {
       try { h(); } catch (e) {
         console.warn(`CircuitBreaker: event handler error for "${event}":`, e);
       }
