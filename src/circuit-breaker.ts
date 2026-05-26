@@ -1,4 +1,4 @@
-import { CircuitBreakerOpenError } from "./errors.js";
+import { CircuitBreakerOpenError, CircuitBreakerQueueFullError } from "./errors.js";
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
 
@@ -180,11 +180,7 @@ export class CircuitBreaker {
       this.#lastSuccess = undefined;
       this.#startTime = performance.now();
       this.#lastOpenTime = 0;
-      this.#listeners.clear();
       this.#rollingBuckets = [];
-      this.#queue = [];
-      this.#pending = 0;
-      this.#busy = false;
     });
   }
 
@@ -252,7 +248,7 @@ export class CircuitBreaker {
   // Linked-list based serialization — zero-alloc when no contention
   #synchronized<T>(fn: () => Promise<T>): Promise<T> {
     if (this.#pending >= this.#opts.maxPending) {
-      return Promise.reject(new CircuitBreakerOpenError(
+      return Promise.reject(new CircuitBreakerQueueFullError(
         `Circuit breaker queue full (max ${this.#opts.maxPending} pending)`
       ));
     }

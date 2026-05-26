@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { CircuitBreaker, CircuitBreakerOpenError } from "../src/index.ts";
+import { CircuitBreaker, CircuitBreakerOpenError, CircuitBreakerQueueFullError } from "../src/index.ts";
 
 function rejectFn(msg = "fail"): () => Promise<never> {
   return () => Promise.reject(new Error(msg));
@@ -373,7 +373,8 @@ describe("Rolling Window", () => {
       await cb.call(slow);
       expect.unreachable("should have thrown");
     } catch (err) {
-      expect(err).toBeInstanceOf(CircuitBreakerOpenError);
+      expect(err).toBeInstanceOf(CircuitBreakerQueueFullError);
+      expect((err as CircuitBreakerQueueFullError).code).toBe("CIRCUIT_BREAKER_QUEUE_FULL");
     }
   });
 
