@@ -354,21 +354,21 @@ class ServiceClient {
 
 ## Benchmarks
 
-Environment: Bun v1.3.14, 5,000 iterations × 3 samples (with warmup).
+Environment: Bun v1.3.14, 5,000 iterations × 3 samples × 5 rounds (average).
 
-| Operation | Throughput | vs opossum | vs cockatiel |
-|-----------|-----------|------------|--------------|
-| raw async fn (baseline, no CB) | 991K ops/s | — | — |
-| **@nds-stack/bun-circuit-breaker** (per-instance) | 233K ops/s | **+38%** | -23% |
-| **@nds-stack/bun-circuit-breaker** (persistent) | **266K ops/s** | **+58%** | -12% |
-| opossum (persistent) | 169K ops/s | — | — |
-| cockatiel (persistent) | 304K ops/s | — | — |
-| **@nds-stack/bun-circuit-breaker** (open rejection) | 130K ops/s | -46% | -57% |
-| opossum (open rejection) | 242K ops/s | — | — |
+| Operation | ops/s | vs opossum | vs cockatiel |
+|-----------|-------|------------|--------------|
+| raw async fn (baseline, no CB) | 2,195,502 | — | — |
+| **@nds-stack/bun-circuit-breaker** (per-instance) | 785,365 | **+35%** | -34% |
+| **@nds-stack/bun-circuit-breaker** (persistent) | **961,112** | **+65%** | -19% |
+| opossum (persistent) | 581,873 | — | — |
+| cockatiel (persistent) | 1,193,655 | +105% | — |
+| **@nds-stack/bun-circuit-breaker** (open rejection) | 313,979 | -33% | -74% |
+| opossum (open rejection) | 466,003 | — | — |
 
 > **Note:** cockatiel is faster in the success path because it uses a simpler internal architecture without a promise-chain mutex. The trade-off is that `@nds-stack/bun-circuit-breaker` guarantees **thread-safe state transitions** under concurrent calls via its promise-chain mutex — essential for correctness in real-world concurrent workloads.
 >
-> Against opossum (the most popular Node.js circuit breaker), `@nds-stack/bun-circuit-breaker` is **58% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> Against opossum (the most popular Node.js circuit breaker), `@nds-stack/bun-circuit-breaker` is **65% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
 
 Performance tip: Reuse a single `CircuitBreaker` instance per endpoint/service for best throughput (avoid per-call construction overhead).
 
