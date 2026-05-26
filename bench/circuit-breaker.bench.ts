@@ -1,3 +1,4 @@
+// Custom benchmark runner — Bun.bench() not available in Bun v1.3.14 on Windows.
 import { CircuitBreaker as NdsCircuitBreaker } from "../src/index.ts";
 import Opossum from "opossum";
 import { circuitBreaker, handleAll, ConsecutiveBreaker } from "cockatiel";

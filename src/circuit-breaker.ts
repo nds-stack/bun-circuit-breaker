@@ -186,6 +186,7 @@ export class CircuitBreaker {
   }
 
   on(event: EventName, handler: () => void): void {
+    if (typeof handler !== "function") throw new TypeError("CircuitBreaker.on(): handler must be a function");
     const existing = this.#listeners.get(event);
     if (existing) {
       if (existing.size >= this.#maxListeners) {
@@ -199,6 +200,7 @@ export class CircuitBreaker {
   }
 
   off(event: EventName, handler: () => void): void {
+    if (typeof handler !== "function") throw new TypeError("CircuitBreaker.off(): handler must be a function");
     const existing = this.#listeners.get(event);
     if (existing) {
       existing.delete(handler);
@@ -241,6 +243,7 @@ export class CircuitBreaker {
     });
   }
 
+  // promise-chain mutex — cannot use async/await; need to chain onto prev promise
   #synchronized<T>(fn: () => Promise<T>): Promise<T> {
     if (this.#pending >= this.#opts.maxPending) {
       return Promise.reject(new CircuitBreakerOpenError(

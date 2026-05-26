@@ -387,4 +387,17 @@ describe("Rolling Window", () => {
       cb.on("open", () => {});
     }).not.toThrow();
   });
+
+  test("on() throws TypeError for non-function handler", () => {
+    const cb = new CircuitBreaker();
+    expect(() => (cb.on as (e: string, h: unknown) => void)("open", null)).toThrow(TypeError);
+    expect(() => (cb.on as (e: string, h: unknown) => void)("open", "string")).toThrow(TypeError);
+    expect(() => (cb.on as (e: string, h: unknown) => void)("open", 42)).toThrow(TypeError);
+  });
+
+  test("off() throws TypeError for non-function handler", () => {
+    const cb = new CircuitBreaker();
+    expect(() => (cb.off as (e: string, h: unknown) => void)("open", null)).toThrow(TypeError);
+    expect(() => (cb.off as (e: string, h: unknown) => void)("open", "string")).toThrow(TypeError);
+  });
 });

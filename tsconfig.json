@@ -20,5 +20,5 @@
     "noUnusedParameters": true,
   "noPropertyAccessFromIndexSignature": false
 },
-"exclude": ["dist", "bench/competitors"]
+"exclude": ["dist", "bench/Competitor"]
 }
