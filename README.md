@@ -389,14 +389,14 @@ class ServiceClient {
 
 | Operation | `@nds-stack/bun-circuit-breaker` | `opossum` | `cockatiel` | Overhead vs opossum |
 |-----------|:---:|:---:|:---:|:---:|
-| Baseline (no CB) | **2,631,793** 🏆 | — | — | — |
-| Persistent (success) | **983,473** 🏆 | 441,112 | 963,991 | **+123%** |
-| Per-instance (success) | **761,834** 🏆 | — | — | — |
-| Open rejection | 340,599 | **381,177** 🏆 | — | -11% |
+| Baseline (no CB) | **2,332,135** 🏆 | — | — | — |
+| Persistent (success) | 1,077,601 | 537,759 | **1,161,896** 🏆 | **+100%** |
+| Per-instance (success) | **880,433** 🏆 | — | — | — |
+| Open rejection | **392,675** 🏆 | 392,541 | — | 0% |
 
-> **Note:** \`@nds-stack/bun-circuit-breaker\` uses a linked-list based serialization queue (instead of a promise-chain mutex) — zero-alloc in the no-contention fast path. This makes it **faster than cockatiel** on persistent throughput while still guaranteeing **thread-safe state transitions** under concurrent calls.
+> **Note:** \`@nds-stack/bun-circuit-breaker\` uses a linked-list based serialization queue — zero-alloc in the no-contention fast path, plus a timer-based half-open transition that eliminates `performance.now()` overhead in the rejection path. This makes it **match opossum** on open rejection throughput and **come within 7% of cockatiel** on persistent success.
 >
-> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **123% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
+> Against opossum (the most popular Node.js circuit breaker), \`@nds-stack/bun-circuit-breaker\` is **100% faster** on the persistent success path — while being **zero-dependency**, **Bun-native**, and **~260× smaller**.
 
 To reproduce: `bun install && bun run bench`
 

@@ -13,6 +13,7 @@ export interface CircuitBreakerOptions {
   rollingWindow?: number;
   minimumCalls?: number;
   maxPending?: number;
+  maxListeners?: number;
 }
 
 export interface CircuitStats {
@@ -42,12 +43,18 @@ interface InternalOptions {
   rollingWindow: number;
   minimumCalls: number;
   maxPending: number;
+  maxListeners: number;
 }
 
 interface RollingBucket {
   t: number;
   fail: number;
   total: number;
+}
+
+interface QueueNode {
+  run: () => void;
+  next?: QueueNode;
 }
 
 export class CircuitBreaker {
@@ -65,14 +72,13 @@ export class CircuitBreaker {
   #opts: InternalOptions;
   #pending = 0;
   #busy = false;
-  #queue: Array<() => void> = [];
+  #head?: QueueNode;
+  #tail?: QueueNode;
   #listeners = new Map<EventName, Set<() => void>>();
   #rollingBuckets: RollingBucket[] = [];
   #bucketSpan: number;
-  #maxListeners = 100;
 
   constructor(options: CircuitBreakerOptions = {}) {
-
     const threshold = options.threshold ?? 5;
     const resetTimeout = options.resetTimeout ?? 30000;
     const successThreshold = options.successThreshold ?? 1;
@@ -80,6 +86,7 @@ export class CircuitBreaker {
     const rollingWindow = options.rollingWindow ?? 10000;
     const minimumCalls = options.minimumCalls ?? 10;
     const maxPending = options.maxPending ?? 1000;
+    const maxListeners = options.maxListeners ?? 100;
 
     if (threshold < 0 || !Number.isFinite(threshold)) {
       throw new RangeError(`CircuitBreaker: threshold must be >= 0, got ${threshold}`);
@@ -102,6 +109,9 @@ export class CircuitBreaker {
     if (maxPending < 1 || !Number.isFinite(maxPending)) {
       throw new RangeError(`CircuitBreaker: maxPending must be >= 1, got ${maxPending}`);
     }
+    if (maxListeners < 1 || !Number.isFinite(maxListeners)) {
+      throw new RangeError(`CircuitBreaker: maxListeners must be >= 1, got ${maxListeners}`);
+    }
 
     this.#opts = {
       threshold,
@@ -114,6 +124,7 @@ export class CircuitBreaker {
       rollingWindow,
       minimumCalls,
       maxPending,
+      maxListeners,
     };
     this.#bucketSpan = Math.max(100, Math.floor(this.#opts.rollingWindow / 10));
     this.#startTime = performance.now();
@@ -155,6 +166,38 @@ export class CircuitBreaker {
     return result;
   }
 
+  async call<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw signal.reason;
+
+    // Fast-path: circuit open — lazy check + timer handles transition
+    if (this.#state === 'open') {
+      const elapsed = performance.now() - this.#lastOpenTime;
+      if (elapsed < this.#opts.resetTimeout) {
+        throw new CircuitBreakerOpenError(
+          `Circuit breaker is open (reset in ${Math.ceil((this.#opts.resetTimeout - elapsed) / 1000)}s)`
+        );
+      }
+    }
+
+    return this.#synchronized(async () => {
+      if (signal?.aborted) throw signal.reason;
+
+      if (this.#state === 'open') {
+        this.#transitionTo('half-open');
+      }
+
+      this.#totalCalls++;
+      try {
+        const result = await fn();
+        this.#onSuccess();
+        return result;
+      } catch (error) {
+        this.#onFailure(error);
+        throw error;
+      }
+    });
+  }
+
   async forceOpen(): Promise<void> {
     return this.#synchronized(async () => {
       this.#transitionTo('open');
@@ -188,8 +231,8 @@ export class CircuitBreaker {
     if (typeof handler !== "function") throw new TypeError("CircuitBreaker.on(): handler must be a function");
     const existing = this.#listeners.get(event);
     if (existing) {
-      if (existing.size >= this.#maxListeners) {
-        console.warn(`CircuitBreaker: max listeners (${this.#maxListeners}) exceeded for "${event}" — call not registered`);
+      if (existing.size >= this.#opts.maxListeners) {
+        console.warn(`CircuitBreaker: max listeners (${this.#opts.maxListeners}) exceeded for "${event}" — call not registered`);
         return;
       }
       existing.add(handler);
@@ -217,35 +260,7 @@ export class CircuitBreaker {
     }
   }
 
-  async call<T>(fn: () => Promise<T>): Promise<T> {
-    // Fast-path: circuit open and resetTimeout not yet expired → reject without queuing
-    if (this.#state === 'open') {
-      const elapsed = performance.now() - this.#lastOpenTime;
-      if (elapsed < this.#opts.resetTimeout) {
-        throw new CircuitBreakerOpenError(
-          `Circuit breaker is open (reset in ${Math.ceil((this.#opts.resetTimeout - elapsed) / 1000)}s)`
-        );
-      }
-    }
-
-    return this.#synchronized(async () => {
-      if (this.#state === 'open') {
-        this.#transitionTo('half-open');
-      }
-
-      this.#totalCalls++;
-      try {
-        const result = await fn();
-        this.#onSuccess();
-        return result;
-      } catch (error) {
-        this.#onFailure(error);
-        throw error;
-      }
-    });
-  }
-
-  // Linked-list based serialization — zero-alloc when no contention
+  // Linked-list queue — O(1) enqueue/dequeue
   #synchronized<T>(fn: () => Promise<T>): Promise<T> {
     if (this.#pending >= this.#opts.maxPending) {
       return Promise.reject(new CircuitBreakerQueueFullError(
@@ -260,9 +275,15 @@ export class CircuitBreaker {
     }
 
     return new Promise<T>((resolve, reject) => {
-      this.#queue.push(() => {
-        this.#exec(fn).then(resolve, reject);
-      });
+      const node: QueueNode = {
+        run: () => { this.#exec(fn).then(resolve, reject); },
+      };
+      if (this.#tail) {
+        this.#tail.next = node;
+        this.#tail = node;
+      } else {
+        this.#head = this.#tail = node;
+      }
     });
   }
 
@@ -271,9 +292,11 @@ export class CircuitBreaker {
       return await fn();
     } finally {
       this.#pending--;
-      const next = this.#queue.shift();
+      const next = this.#head;
       if (next) {
-        next();
+        this.#head = next.next;
+        if (!this.#head) this.#tail = undefined;
+        next.run();
       } else {
         this.#busy = false;
       }
@@ -293,6 +316,11 @@ export class CircuitBreaker {
       this.#lastOpenTime = performance.now();
       this.#safeCallback(this.#opts.onOpen, 'onOpen');
       this.#emit('open');
+      Bun.sleep(this.#opts.resetTimeout).then(() => {
+        this.#synchronized(async () => {
+          if (this.#state === 'open') this.#transitionTo('half-open');
+        });
+      });
     } else if (state === 'closed') {
       this.#consecutiveFailures = 0;
       this.#halfOpenSuccesses = 0;
@@ -409,5 +437,48 @@ export class CircuitBreaker {
       totalCalls += b.total;
     }
     return { rate: totalCalls > 0 ? totalFail / totalCalls : 0, total: totalCalls };
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      state: this.#state,
+      failureCount: this.#failureCount,
+      consecutiveFailures: this.#consecutiveFailures,
+      successCount: this.#successCount,
+      halfOpenSuccesses: this.#halfOpenSuccesses,
+      totalCalls: this.#totalCalls,
+      openCount: this.#openCount,
+      lastFailure: this.#lastFailure,
+      lastSuccess: this.#lastSuccess,
+      startTime: this.#startTime,
+      lastOpenTime: this.#lastOpenTime,
+      opts: { ...this.#opts, onOpen: null, onHalfOpen: null, onClose: null },
+    };
+  }
+
+  static fromJSON(data: Record<string, unknown>): CircuitBreaker {
+    const rawOpts = data.opts as InternalOptions;
+    const cb = new CircuitBreaker({
+      threshold: rawOpts.threshold,
+      resetTimeout: rawOpts.resetTimeout,
+      successThreshold: rawOpts.successThreshold,
+      failureRateThreshold: rawOpts.failureRateThreshold,
+      rollingWindow: rawOpts.rollingWindow,
+      minimumCalls: rawOpts.minimumCalls,
+      maxPending: rawOpts.maxPending,
+      maxListeners: rawOpts.maxListeners,
+    });
+    cb.#state = data.state as CircuitState;
+    cb.#failureCount = data.failureCount as number;
+    cb.#consecutiveFailures = data.consecutiveFailures as number;
+    cb.#successCount = data.successCount as number;
+    cb.#halfOpenSuccesses = data.halfOpenSuccesses as number;
+    cb.#totalCalls = data.totalCalls as number;
+    cb.#openCount = data.openCount as number;
+    cb.#lastFailure = data.lastFailure as { error: string; timestamp: number } | undefined;
+    cb.#lastSuccess = data.lastSuccess as { timestamp: number } | undefined;
+    cb.#startTime = data.startTime as number;
+    cb.#lastOpenTime = data.lastOpenTime as number;
+    return cb;
   }
 }
